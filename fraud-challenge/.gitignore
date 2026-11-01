@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+data/*.csv
+data/*.parquet
+artifacts/*
+figures/*
+!data/.gitkeep
+!artifacts/.gitkeep
+!figures/.gitkeep
+.ipynb_checkpoints/

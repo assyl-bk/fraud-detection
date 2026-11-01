@@ -1,0 +1,14 @@
+pandas>=2.0
+numpy
+scikit-learn>=1.3
+imbalanced-learn
+xgboost>=2.0
+shap
+streamlit>=1.50
+plotly
+fastapi
+uvicorn
+httpx
+joblib
+matplotlib
+pyarrow
