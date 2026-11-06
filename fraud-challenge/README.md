@@ -1,143 +1,369 @@
-# Explainable Fraud Detection - Data Mining Challenge 2 (ENSI)
+# Explainable Fraud Detection
 
-Dataset: **Credit Card Transactions Fraud Detection (Sparkov)** - `fraudTrain.csv` + `fraudTest.csv` from Kaggle.
-One script per module, run them in order. Each step prints what to look at and what to write in your report.
+An end-to-end fraud-detection project for the Sparkov credit-card transaction
+dataset. The project includes exploratory analysis, leakage-safe feature
+engineering, supervised and unsupervised models, cost-based thresholding,
+SHAP explanations, a Streamlit dashboard, and a FastAPI service.
 
-```
+The pipeline scripts are designed to be run in order:
+
+1. Load and explore the data.
+2. Build features and chronological train/validation/test splits.
+3. Compare imbalance strategies and train models.
+4. Evaluate models and select a business-aware alert threshold.
+5. Generate global and local SHAP explanations.
+
+## Project structure
+
+```text
 fraud-challenge/
-  config.py              <- business parameters (alert cost, analyst budget...) - JUSTIFY these
-  run_01_eda.py          Module 1  data + exploratory analysis
-  run_02_features.py     Module 2  features + chronological split
-  run_03_train.py        Modules 2-3  imbalance comparison + supervised & unsupervised models
-  run_04_evaluate.py     Module 4  metrics, PR curves, cost-based threshold
-  run_05_explain.py      Module 5  SHAP (global + one alert)
-  app.py                 Streamlit web app (all modules, live sliders)
-  api.py                 Module 6  FastAPI
-  src/                   reusable code (features, metrics, models, explain)
-  tools/make_synthetic_data.py   fake Sparkov-shaped data to test the pipeline
-  data/  artifacts/  figures/    inputs / saved models & scores / plots
+├── api.py                       # FastAPI prediction service
+├── app.py                       # Streamlit dashboard
+├── config.py                    # Paths and business/model parameters
+├── requirements.txt             # Python dependencies
+├── run_01_eda.py                # Module 1: EDA
+├── run_02_features.py           # Module 2: features and split
+├── run_03_train.py              # Modules 2-3: imbalance and models
+├── run_04_evaluate.py           # Module 4: metrics and threshold
+├── run_05_explain.py            # Module 5: SHAP explanations
+├── src/
+│   ├── data.py                  # Raw CSV loading
+│   ├── explain.py               # SHAP and reason codes
+│   ├── features.py              # Static and behavioral features
+│   ├── metrics.py               # Evaluation and cost functions
+│   └── models.py                # Model and resampling helpers
+├── tools/
+│   └── make_synthetic_data.py   # Local smoke-test data generator
+├── data/                        # Input data and generated feature tables
+├── artifacts/                   # Models, scores, metrics, and metadata
+└── figures/                     # EDA, evaluation, and SHAP plots
 ```
 
-## 0. Setup (once)
+## Requirements
+
+- Python 3.10 or newer
+- At least 8 GB of RAM for the full dataset
+- The Sparkov `fraudTrain.csv` and `fraudTest.csv` files
+
+The full training pipeline can take several minutes. LOF and One-Class SVM
+are the slowest models.
+
+## Installation
+
+Clone the repository and enter the project directory:
 
 ```bash
+git clone <YOUR_GITHUB_REPOSITORY_URL>
 cd fraud-challenge
-python -m venv .venv
-source .venv/bin/activate            # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
 ```
 
-Download `fraudTrain.csv` and `fraudTest.csv` from Kaggle (Sparkov credit card fraud) into `data/`.
-Need RAM? ~8 GB is enough. **Quick dry run first** (30 s, fake data, no Kaggle needed):
+Create and activate a virtual environment.
+
+### Windows PowerShell
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+If PowerShell prevents script activation, run this once for the current user,
+then activate again:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+### macOS/Linux
 
 ```bash
-# Linux/Mac                                   # Windows PowerShell
-export FRAUD_SMOKE=1                          # $env:FRAUD_SMOKE="1"
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+Install the dependencies:
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+## Prepare the data
+
+Download the Sparkov credit-card fraud dataset from Kaggle and place these
+two files directly in the project's `data/` directory:
+
+```text
+data/
+├── fraudTrain.csv
+└── fraudTest.csv
+```
+
+The loader uses these columns from each CSV:
+
+```text
+trans_date_trans_time, cc_num, merchant, category, amt, gender, state,
+lat, long, city_pop, job, dob, merch_lat, merch_long, trans_num, is_fraud
+```
+
+The original CSV files are not included in this repository. Do not commit
+the dataset or other sensitive transaction data.
+
+## Quick smoke test without Kaggle data
+
+To verify the complete pipeline locally, generate a small synthetic dataset.
+Synthetic results are intentionally easy to classify and must not be used in
+a report.
+
+### Windows PowerShell
+
+```powershell
+$env:FRAUD_SMOKE = "1"
+python tools\make_synthetic_data.py
+```
+
+### macOS/Linux
+
+```bash
+export FRAUD_SMOKE=1
 python tools/make_synthetic_data.py
 ```
-Then run steps 1-5 below, and **delete `data/*.csv data/*.parquet artifacts/* figures/*` and unset `FRAUD_SMOKE`** before using the real data.
-(The synthetic data is trivially separable, so metrics look near-perfect. That is expected; never report them.)
 
-## Step 1 - Data & EDA (Module 1)
+The generator writes synthetic `fraudTrain.csv` and `fraudTest.csv` files to
+`data/`. Run the five pipeline steps below. Before switching to real data,
+remove the generated CSV/parquet files and artifacts, then unset
+`FRAUD_SMOKE`:
+
+```text
+data/*.csv
+data/*.parquet
+artifacts/*
+figures/*
+```
+
+On Windows PowerShell, unset the environment variable with:
+
+```powershell
+Remove-Item Env:FRAUD_SMOKE
+```
+
+On macOS/Linux:
+
+```bash
+unset FRAUD_SMOKE
+```
+
+## Run the pipeline
+
+Run every step from the project root and in the order shown.
+
+### 1. Exploratory data analysis
 
 ```bash
 python run_01_eda.py
 ```
-Merges both files, sorts by time, prints fraud rate / cards / amounts per class, previews the 60/20/20 split and saves
-4 plots in `figures/`. **Report:** fraud rate (~0.5%), amount distribution fraud vs legit, fraud rate over time / by hour / by category,
-and the observation that the provided train/test files are merged to make *your own* chronological split.
 
-## Step 2 - Features & split (Module 2)
+This merges and sorts both CSV files chronologically, prints dataset
+statistics, and creates:
+
+- `data/transactions.parquet`
+- `figures/eda_fraud_rate_monthly.png`
+- `figures/eda_fraud_rate_hour.png`
+- `figures/eda_fraud_rate_category.png`
+- `figures/eda_amount_by_class.png`
+
+### 2. Feature engineering and data split
 
 ```bash
 python run_02_features.py
 ```
-- Time: hour as sin/cos (cyclic), weekday, weekend, night flag.
-- Other: log amount, home-merchant distance (haversine), age, log city population, gender, category one-hot.
-- **Behavioral (per card, past only):** transactions in the previous 1h and 24h, amount / card's 30-day mean, seconds since previous transaction.
-- **Split:** chronological by position, 60/20/20. Categories learned on train only.
 
-Check the *leakage check* printout: the first transaction of a card must show `0 / 0 / 1.0 / 2592000` (no history).
-**Report:** why chronological, why velocity features use only the past, the 3 splits' dates and fraud rates (drift!).
+Features include:
 
-## Step 3 - Imbalance + models (Modules 2-3)
+- Cyclic time features, weekday/weekend, and night-time indicators
+- Log transaction amount, customer age, city population, and gender
+- Haversine distance between the customer and merchant
+- Category one-hot features learned from the training split only
+- Past-only card behavior: transaction counts over one and 24 hours,
+  amount relative to the card's 30-day mean, and time since the previous
+  transaction
+
+The data is split chronologically into 60% train, 20% validation, and 20%
+test. This avoids using future transactions to predict past transactions.
+The step creates:
+
+- `data/features.parquet`
+- `artifacts/feature_names.json`
+- `artifacts/categories.json`
+
+Review the printed leakage check. The first transaction for a card should
+have no transaction history.
+
+### 3. Train models and compare imbalance strategies
 
 ```bash
-python run_03_train.py        # a few minutes on the full dataset
+python run_03_train.py
 ```
-1. **Imbalance strategies compared on validation** (XGBoost, PR-AUC): none, class weights, undersampling 1:1 / 1:5 / 1:10 / 1:20
-   (3 seeds each; resampling touches the training set only). The best one is kept -> `artifacts/imbalance_comparison.csv`.
-   Course order: start with *no resampling + threshold*, then class weights, then undersampling; SMOTE only if validation proves it helps.
-   Undersampling inflates probabilities, so they are corrected with the Bayes formula (slide 156).
-2. Supervised: XGBoost (main), weighted logistic regression (baseline).
-3. Unsupervised: Isolation Forest, LOF, One-Class SVM (LOF/OCSVM trained on a subsample of normal transactions, standardised).
-   Unsupervised scores are converted to percentiles of the validation distribution so they live in [0, 1] like probabilities.
 
-**Report:** the imbalance table and your justification, why unsupervised models are weaker (unusual != fraudulent), subsampling for LOF/OCSVM.
-Optional extra: add an autoencoder (`MLPRegressor`, slide 178) as a 4th unsupervised method.
+The script compares no resampling, class weighting, and several
+undersampling ratios on the validation set. It then trains:
 
-## Step 4 - Evaluation & threshold (Module 4)
+- XGBoost
+- Weighted logistic regression
+- Isolation Forest
+- Local Outlier Factor
+- One-Class SVM
+
+Generated files include:
+
+- `artifacts/imbalance_comparison.csv`
+- `artifacts/xgb.joblib`
+- `artifacts/scores.parquet`
+- `artifacts/train_summary.json`
+
+### 4. Evaluate models and choose the alert threshold
 
 ```bash
 python run_04_evaluate.py
 ```
-- Metrics per model on val and test: **PR-AUC, ROC-AUC, precision@k, recall@k, F2, MCC**.
-- **Budget:** `k = ALERTS_PER_DAY x number of days` (config.py). Justify the number (analyst capacity vs ~13 frauds/day).
-- **Cost:** `C(tau) = sum(amounts of missed frauds) + Ca x number of alerts` (`ALERT_COST` in config.py). Justify Ca.
-- `tau` is chosen **on validation**, then evaluated on test; column `test_oracle_cost` shows what test alone would have chosen (confirmation).
-- Figures: overlaid PR curves, cost vs number of alerts.
 
-**Report:** comparison table (all methods), PR curves, chosen Ca and k, savings vs "no model", validation vs test cost.
-Try several Ca values (1, 5, 20, 50) and show how the optimal threshold moves.
+The threshold is selected on validation data using:
 
-## Step 5 - Explainability (Module 5)
+```text
+business cost = missed fraudulent amount + alert cost × number of alerts
+```
+
+The selected threshold is then evaluated on the test set. Reported metrics
+include PR-AUC, ROC-AUC, precision@k, recall@k, F2, MCC, alert count, and
+business cost.
+
+Generated files include:
+
+- `artifacts/model_comparison.csv`
+- `artifacts/thresholds.json`
+- `figures/pr_curves_test.png`
+- `figures/cost_curve_val_xgb.png`
+
+### 5. Generate SHAP explanations
 
 ```bash
 python run_05_explain.py
 ```
-SHAP beeswarm + bar (global), SHAP waterfall + **reason codes** (top 3-5 features pushing one alert towards fraud).
-**Report:** top features and whether they make business sense (night, distance, amount vs history, velocity), one explained alert.
-SHAP values are in log-odds of the XGBoost model.
 
-## Step 6 - Web app
+This creates global feature-importance plots and a local explanation for one
+high-scoring transaction:
+
+- `figures/shap_beeswarm.png`
+- `figures/shap_bar.png`
+- `figures/shap_waterfall_example.png`
+- `artifacts/example_reason_codes.json`
+
+## Run the Streamlit dashboard
+
+Run the pipeline through at least step 4 first. Run step 5 as well to show
+the SHAP plots in the dashboard.
 
 ```bash
 streamlit run app.py
 ```
-5 tabs: Data / Split & imbalance / Models (table + PR curves) / **Threshold & budget** (two sliders, live alerts, precision, recall, F2, cost)
-/ Explain an alert (pick an alert -> waterfall + reason codes). Take screenshots for the report.
 
-## Step 7 - API (Module 6)
+Open the URL printed by Streamlit, normally
+`http://localhost:8501`. The dashboard includes tabs for:
+
+- Data and exploratory analysis
+- Chronological split and imbalance comparison
+- Model comparison and precision-recall curves
+- Threshold, analyst budget, alerts, precision, recall, F2, and cost
+- SHAP explanation and reason codes for an alert
+
+## Run the FastAPI service
+
+Run steps 1-4 first so the model and threshold artifacts exist:
 
 ```bash
-uvicorn api:app --reload
+python -m uvicorn api:app --reload
 ```
-Open http://127.0.0.1:8000/docs. Endpoints: `GET /health`, `GET /model-info`, `POST /predict`
-(returns `fraud_score`, `alert`, `threshold`, `reason_codes`). Velocity features are sent by the caller
-(in production they come from a feature store). The PDF brief cuts off at "Module 6": check the exact API requirements with your teacher.
 
-Example:
+Open the interactive API documentation at
+[`http://127.0.0.1:8000/docs`](http://127.0.0.1:8000/docs).
+
+Available endpoints:
+
+- `GET /health`
+- `GET /model-info`
+- `POST /predict`
+
+Example request with `curl`:
+
 ```bash
-curl -X POST http://127.0.0.1:8000/predict -H "Content-Type: application/json" -d '{
-  "ts":"2020-09-14T23:42:10","amt":742.5,"category":"shopping_net","gender":"F",
-  "lat":40.7,"long":-74.0,"merch_lat":34.0,"merch_long":-118.2,"city_pop":8000000,"dob":"1985-03-02",
-  "n_tx_1h":3,"n_tx_24h":4,"amt_ratio_30d":9.5,"secs_since_prev":420}'
+curl -X POST "http://127.0.0.1:8000/predict" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ts": "2020-09-14T23:42:10",
+    "amt": 742.5,
+    "category": "shopping_net",
+    "gender": "F",
+    "lat": 40.7,
+    "long": -74.0,
+    "merch_lat": 34.0,
+    "merch_long": -118.2,
+    "city_pop": 8000000,
+    "dob": "1985-03-02",
+    "n_tx_1h": 3,
+    "n_tx_24h": 4,
+    "amt_ratio_30d": 9.5,
+    "secs_since_prev": 420
+  }'
 ```
 
-## Rubric checklist
+The response contains a fraud score, alert decision, configured threshold,
+and reason codes. In production, the caller or a feature store must provide
+the four behavioral features because the API does not have access to the
+card's transaction history.
 
-- [ ] Chronological split, behavioral features without leakage (Step 2)
-- [ ] Imbalance strategy chosen by a validation comparison, resampling on train only (Step 3)
-- [ ] >= 1 supervised + >= 2 unsupervised incl. Isolation Forest, comparison table (Steps 3-4)
-- [ ] PR-AUC, ROC-AUC, precision@k, recall@k, F2, MCC; overlaid PR curves (Step 4)
-- [ ] Threshold minimising a cost in amounts, chosen on val, confirmed on test (Step 4)
-- [ ] Live threshold + budget sliders in the app (Step 6)
-- [ ] SHAP global + waterfall + reason codes (Step 5)
-- [ ] FastAPI (Step 7)
+## Configuration
+
+Edit [`config.py`](config.py) to change:
+
+- `ALERT_COST`: cost of reviewing one alert
+- `ALERTS_PER_DAY`: analyst alert capacity
+- `UNDERSAMPLE_RATIOS` and `UNDERSAMPLE_SEEDS`
+- `UNSUP_TRAIN_SAMPLE`
+- `XGB_PARAMS`
+
+Optional environment variables:
+
+- `FRAUD_WORK`: store `data/`, `artifacts/`, and `figures/` outside the
+  repository
+- `FRAUD_SMOKE=1`: use smaller model settings for the synthetic smoke test
+
+For example:
+
+```powershell
+$env:FRAUD_WORK = "C:\path\to\fraud-work"
+python run_01_eda.py
+```
 
 ## Troubleshooting
 
-- *Out of memory:* close other apps; in `config.py` lower `UNSUP_TRAIN_SAMPLE`; or work on the last N months only.
-- *Step 3 too slow:* lower `n_estimators` in `XGB_PARAMS`, or `UNSUP_TRAIN_SAMPLE`.
-- *`Missing data/fraudTrain.csv`:* the files must be directly in `data/`.
-- *Streamlit says artifacts not found:* run steps 1-4 (and 5 for the SHAP images) from the project folder.
+- **Missing `data/fraudTrain.csv`:** put both required CSV files directly
+  inside `data/`, or generate synthetic files for a smoke test.
+- **Artifacts not found in Streamlit/API:** run steps 1-4 first; run step 5
+  for SHAP images.
+- **Out of memory:** close other applications, reduce `UNSUP_TRAIN_SAMPLE`
+  in `config.py`, or use a smaller/synthetic dataset.
+- **Training is too slow:** reduce `n_estimators` in `XGB_PARAMS` and
+  `UNSUP_TRAIN_SAMPLE`. LOF is usually the slowest stage.
+- **PowerShell activation is blocked:** use the `Set-ExecutionPolicy`
+  command in the installation section, or activate the environment from
+  Command Prompt with `.venv\Scripts\activate.bat`.
+
+## Suggested analysis checklist
+
+- Explain why the split is chronological and why behavioral features use
+  only past transactions.
+- Compare imbalance strategies using validation data.
+- Compare at least one supervised and two unsupervised models.
+- Include PR-AUC, ROC-AUC, precision@k, recall@k, F2, and MCC.
+- Justify `ALERT_COST` and `ALERTS_PER_DAY`.
+- Show that the threshold is selected on validation and confirmed on test.
+- Include global SHAP importance, a waterfall plot, and reason codes.
